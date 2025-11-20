@@ -1,36 +1,28 @@
-# app.py
-# ============================================
-# PowerFLOW QA Assistant + Log Analytics
-# ============================================
-
 import os
 import re
 from collections import Counter, defaultdict
 from typing import List, Tuple, Dict
-
+import getpass
 import streamlit as st
 from dotenv import load_dotenv
 
 from langchain.chat_models import init_chat_model
 from langchain_core.prompts import ChatPromptTemplate
 
-# =====================
-# 1. ENV + MODEL SETUP
-# =====================
-
 load_dotenv()
 
-if not os.environ.get("MISTRAL_API_KEY"):
-    # In Streamlit Cloud you'll set this as a secret, so this branch won't run there.
-    import getpass
-    os.environ["MISTRAL_API_KEY"] = getpass.getpass("Enter API key for Mistral AI: ")
+API_KEY = os.getenv("MISTRAL_API_KEY")
 
-# Initialize LLM once
+if not API_KEY:
+    raise ValueError(
+        "ERROR: MISTRAL_API_KEY environment variable not found.\n"
+        "Go to HuggingFace Space → Settings → Secrets → Add Secret:\n"
+        "Key = MISTRAL_API_KEY\nValue = your_api_key"
+    )
+
+
 model = init_chat_model("mistral-large-latest", model_provider="mistralai")
 
-# =====================
-# 2. PROMPT TEMPLATE
-# =====================
 
 system_template = """
 You are an intelligent QA assistant for SIMULIA PowerFLOW / PowerACOUSTICS.
@@ -58,9 +50,6 @@ prompt_template = ChatPromptTemplate.from_messages(
     [("system", system_template), ("user", user_template)]
 )
 
-# =====================
-# 3. LOG ANALYTICS CODE
-# =====================
 
 ERROR_KEYWORDS = ["ERROR", "FATAL", "EXCEPTION", "ABORT", "FAIL"]
 COMMAND_MIN_LENGTH = 3  # heuristic for "commands"
@@ -90,27 +79,25 @@ def analyze_logs(texts: List[str]) -> Tuple[Counter, Counter, Dict[str, List[str
         if not stripped:
             continue
 
-        # --- Command heuristic: first token of the line
         tokens = stripped.split()
         if tokens:
             first_token = tokens[0]
-            # treat e.g. "RUN", "solve", "prepf", etc. as commands
+           
             if len(first_token) >= COMMAND_MIN_LENGTH and not first_token.startswith("#"):
                 cmd_counter[first_token] += 1
                 previous_command = first_token
 
-        # --- Error detection
         if any(k in raw for k in ERROR_KEYWORDS):
-            # normalize numbers to <NUM> to group similar messages
+           
             key = re.sub(r"\d+", "<NUM>", raw)
             key = re.sub(r"\s+", " ", key).strip()
             error_counter[key] += 1
 
-            # keep up to a few example lines per pattern
+          
             if len(error_examples[key]) < 3:
                 error_examples[key].append(raw)
 
-            # simple pattern: which command appears just before this error
+            
             if previous_command:
                 error_command_cooccurrence[key][previous_command] += 1
 
@@ -129,21 +116,21 @@ def build_context_from_analytics(
     """
     parts = []
 
-    # Top commands
+ 
     if cmd_counter:
         parts.append("Most used commands in the logs:")
         for cmd, cnt in cmd_counter.most_common(top_n):
             parts.append(f"- {cmd}: {cnt} occurrences")
         parts.append("")
 
-    # Top errors
+  
     if error_counter:
         parts.append("Most common error patterns:")
         for err, cnt in error_counter.most_common(top_n):
             parts.append(f"- {cnt}×: {err}")
         parts.append("")
 
-    # Pattern detection: which commands co-occur with errors
+  
     if error_command_cooccurrence:
         parts.append("Patterns: which commands frequently precede certain errors:")
         for err, cmd_counts in list(error_command_cooccurrence.items())[:top_n]:
@@ -154,7 +141,7 @@ def build_context_from_analytics(
             parts.append(f"  Likely associated commands: {top_cmds}")
         parts.append("")
 
-    # Add error examples
+ 
     if error_examples:
         parts.append("Representative error lines (examples):")
         count = 0
@@ -169,9 +156,6 @@ def build_context_from_analytics(
     return "\n".join(parts) if parts else ""
 
 
-# =====================
-# 4. LLM CALL
-# =====================
 
 def call_llm(user_question: str, analytics_context: str = "") -> str:
     if analytics_context:
@@ -189,17 +173,12 @@ def call_llm(user_question: str, analytics_context: str = "") -> str:
     return response.content
 
 
-# =====================
-# 5. STREAMLIT UI
-# =====================
-
 st.set_page_config(page_title="PowerFLOW QA Assistant", page_icon="🧪", layout="wide")
 st.title("🧪 SIMULIA PowerFLOW QA Assistant")
 st.caption("LLM-powered assistant + log analytics for simulation debugging & QA.")
 
 st.markdown("---")
 
-# --- Sidebar: Upload logs + show analytics status
 st.sidebar.header("📁 Log Upload & Analytics")
 uploaded_files = st.sidebar.file_uploader(
     "Upload one or more PowerFLOW / PowerACOUSTICS log files",
@@ -227,13 +206,9 @@ if uploaded_files:
 else:
     st.sidebar.info("No logs uploaded yet. You can still ask general questions.")
 
-# =====================
-# Tabs: Chat | Analytics
-# =====================
-
 tab_chat, tab_analytics = st.tabs(["💬 QA Assistant", "📊 Log Analytics"])
 
-# --- Chat tab
+
 with tab_chat:
     st.subheader("💬 Ask about your simulation or logs")
 
@@ -252,14 +227,13 @@ with tab_chat:
     elif ask:
         st.warning("Please enter a question or paste a log snippet.")
 
-# --- Analytics tab
 with tab_analytics:
     st.subheader("📊 Log Analytics Insights")
 
     if not uploaded_files:
         st.info("Upload one or more log files in the sidebar to see analytics.")
     else:
-        # 1. Most used commands
+        
         st.markdown("### 🧩 Most Used Commands")
         if cmd_stats:
             top_cmds = cmd_stats.most_common(15)
@@ -269,7 +243,7 @@ with tab_analytics:
         else:
             st.write("No commands detected (heuristic may need tuning for your logs).")
 
-        # 2. Most common errors
+      
         st.markdown("### ⚠️ Most Common Error Patterns")
         if err_stats:
             top_errs = err_stats.most_common(15)
@@ -282,7 +256,7 @@ with tab_analytics:
         else:
             st.write("No error patterns detected based on keywords: " + ", ".join(ERROR_KEYWORDS))
 
-        # 3. Simple pattern detection
+        
         st.markdown("### 🔍 Patterns: Commands Associated with Errors")
         if err_cmd_patterns:
             rows = []
