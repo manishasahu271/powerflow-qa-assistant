@@ -3,5 +3,7 @@ python-dotenv
 langchain
 langchain-core
 langchain-community
-mistralai
+langchain-mistralai
+mistralai>=1.0.0
 tiktoken
+
